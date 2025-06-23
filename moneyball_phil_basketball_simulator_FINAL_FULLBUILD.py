@@ -1,41 +1,35 @@
 
-# MoneyBall Phil Basketball Simulator (Final Working Build with Full Features)
+# MoneyBall Phil Basketball Simulator (FINAL BUILD with All Features)
 import streamlit as st
 from PIL import Image
 import base64
-import io
 import random
 import pandas as pd
 
-# Set page config
 st.set_page_config(layout="wide")
 
-# Load and encode background
+# Set full screen background
 def set_background(image_path):
-    with open(image_path, "rb") as img_file:
-        b64_string = base64.b64encode(img_file.read()).decode()
+    with open(image_path, "rb") as image_file:
+        b64 = base64.b64encode(image_file.read()).decode()
     css = f"""
     <style>
     .stApp {{
-        background-image: url("data:image/png;base64,{b64_string}");
+        background-image: url("data:image/png;base64,{b64}");
         background-size: cover;
         background-position: center;
+        background-repeat: no-repeat;
     }}
     </style>
     """
     st.markdown(css, unsafe_allow_html=True)
 
-# Background image
 set_background("arena_background.png")
 
-# Logo
-logo = Image.open("moneyball_logo.png")
-st.image(logo, width=200)
-
-# Title
+# App Title
 st.markdown("<h1 style='text-align: center; color: white;'>MoneyBall Phil Basketball Simulator</h1>", unsafe_allow_html=True)
 
-# Player input section
+# Player Input Section
 st.header("🏀 Player Input")
 col1, col2 = st.columns(2)
 with col1:
@@ -46,7 +40,8 @@ with col1:
     usage = st.number_input("Usage %", min_value=0.0, max_value=100.0, step=0.1)
     odds_over = st.text_input("Over Odds (e.g., -120)")
     odds_under = st.text_input("Under Odds (e.g., +100)")
-
+    sportsbook_line = st.number_input("Sportsbook Line (Points or PRA)", min_value=0.0)
+    recent_avg = st.number_input("Recent Games Avg (Points or PRA)", min_value=0.0)
 with col2:
     stat_type = st.radio("Stat Type to Simulate", ["PRA", "Points Only"])
     points = st.number_input("Points", min_value=0.0)
@@ -54,67 +49,97 @@ with col2:
     assists = st.number_input("Assists", min_value=0.0)
     defense_vs_position = st.number_input("Opponent DEF Rank vs Pos (1-30)", min_value=1, max_value=30)
 
-# Helper functions
+# Helper Functions
 def american_to_prob(odds):
     try:
         odds = int(odds)
         if odds < 0:
-            return round(abs(odds) / (abs(odds) + 100), 4)
+            return abs(odds) / (abs(odds) + 100)
         else:
-            return round(100 / (odds + 100), 4)
+            return 100 / (odds + 100)
     except:
         return None
 
 def calc_ev(true_prob, implied_prob):
     return round((true_prob - implied_prob) * 100, 2)
 
-# Simulation and Board
+def get_zone(prob):
+    if prob >= 0.80:
+        return "🟢 Elite"
+    elif prob >= 0.70:
+        return "🟡 Strong"
+    elif prob >= 0.60:
+        return "🟠 Moderate"
+    else:
+        return "🔴 Low"
+
+def get_defense_tier(rank):
+    if rank >= 21:
+        return "🟢 Easy"
+    elif rank >= 11:
+        return "🟡 Average"
+    else:
+        return "🔴 Tough"
+
+# Simulation Logic
 if st.button("Simulate"):
-    hit_chance = round(random.uniform(0.70, 0.91), 4)  # Placeholder logic
+    base = (points + rebounds + assists) / 3 if stat_type == "PRA" else points
+    combined_avg = (base + recent_avg) / 2
+    defense_factor = 1 - (defense_vs_position / 60)
+    hit_chance = round(min(0.99, max(0.01, combined_avg / sportsbook_line * defense_factor)), 4)
+
     implied_over = american_to_prob(odds_over)
     implied_under = american_to_prob(odds_under)
     ev_over = calc_ev(hit_chance, implied_over) if implied_over else None
     ev_under = calc_ev(1 - hit_chance, implied_under) if implied_under else None
 
-    result_data = {
+    result = {
         "Player": player_name,
         "Type": stat_type,
         "True %": f"{hit_chance * 100:.1f}%",
-        "Over EV": f"{ev_over:.1f}%" if ev_over is not None else "-",
-        "Under EV": f"{ev_under:.1f}%" if ev_under is not None else "-"
+        "Zone": get_zone(hit_chance),
+        "Line": sportsbook_line,
+        "Recent Avg": recent_avg,
+        "Implied Over %": f"{implied_over * 100:.1f}%" if implied_over else "-",
+        "Implied Under %": f"{implied_under * 100:.1f}%" if implied_under else "-",
+        "Over EV": f"{ev_over:.1f}%" if ev_over else "-",
+        "Under EV": f"{ev_under:.1f}%" if ev_under else "-",
+        "Defense Tier": get_defense_tier(defense_vs_position)
     }
-    st.success(f"✅ {player_name} - True Hit Probability for {stat_type}: {hit_chance*100:.2f}%")
 
     if "board" not in st.session_state:
         st.session_state.board = []
-    st.session_state.board.append(result_data)
+    st.session_state.board.append(result)
 
-# Display Board
+    st.success(f"{player_name} - True Hit Probability: {hit_chance * 100:.2f}%")
+
+# Top Player Board
 st.header("📈 Top Player Board")
-if "board" in st.session_state and len(st.session_state.board) > 0:
-    board_df = pd.DataFrame(st.session_state.board)
-    board_df = board_df.sort_values(by="True %", ascending=False)
-    st.dataframe(board_df.reset_index(drop=True))
+if "board" in st.session_state:
+    df = pd.DataFrame(st.session_state.board)
+    df["True % Num"] = df["True %"].str.replace("%","").astype(float)
+    df = df.sort_values(by="True % Num", ascending=False).drop(columns=["True % Num"])
+    st.dataframe(df.reset_index(drop=True))
 
 # Parlay Evaluator
 st.header("💰 Parlay Evaluator")
-parlay_col1, parlay_col2 = st.columns([3, 1])
-
-with parlay_col1:
-    parlay_players = st.multiselect("Select Players for Parlay", options=[row['Player'] for row in st.session_state.get("board", [])])
-with parlay_col2:
-    parlay_odds = st.text_input("Parlay Odds (e.g., +150)")
+c1, c2 = st.columns([3, 1])
+with c1:
+    parlay_players = st.multiselect("Select Players", [r["Player"] for r in st.session_state.get("board", [])])
+with c2:
+    parlay_odds = st.text_input("Parlay Odds (e.g., +145)")
 
 if st.button("Evaluate Parlay") and parlay_players and parlay_odds:
-    selected_rows = [row for row in st.session_state.board if row['Player'] in parlay_players]
-    true_probs = [float(row['True %'].replace('%',''))/100 for row in selected_rows]
-    true_parlay_prob = round(100 * eval('*'.join([str(p) for p in true_probs])), 2)
-    implied_parlay_prob = american_to_prob(parlay_odds)
-    if implied_parlay_prob:
-        implied_parlay_prob = round(implied_parlay_prob * 100, 2)
-        parlay_ev = round(true_parlay_prob - implied_parlay_prob, 2)
-        st.metric(label="True Parlay Probability", value=f"{true_parlay_prob}%")
-        st.metric(label="Implied Probability", value=f"{implied_parlay_prob}%")
-        st.metric(label="EV %", value=f"{parlay_ev}%")
-    else:
-        st.error("Invalid parlay odds input.")
+    selected = [r for r in st.session_state.board if r["Player"] in parlay_players]
+    probs = [float(r["True %"].replace("%", ""))/100 for r in selected]
+    if probs:
+        parlay_true = round(100 * eval("*".join([str(p) for p in probs])), 2)
+        implied = american_to_prob(parlay_odds)
+        if implied:
+            implied_pct = round(implied * 100, 2)
+            ev_parlay = round(parlay_true - implied_pct, 2)
+            st.metric("True Parlay Probability", f"{parlay_true}%")
+            st.metric("Implied Probability", f"{implied_pct}%")
+            st.metric("EV %", f"{ev_parlay}%")
+        else:
+            st.error("Invalid odds")
